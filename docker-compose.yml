@@ -1,0 +1,75 @@
+# docker-compose.yml
+version: '3.8'
+
+services:
+  postgres:
+    image: postgis/postgis:15-3.4
+    container_name: geo-alert-postgres
+    environment:
+      POSTGRES_USER: postgres
+      POSTGRES_PASSWORD: postgres
+      POSTGRES_DB: geo_alerts
+    ports:
+      - "5432:5432"
+    volumes:
+      - postgres_data:/var/lib/postgresql/data
+    healthcheck:
+      test: [ "CMD-SHELL", "pg_isready -U postgres" ]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+
+  redis:
+    image: redis:7-alpine
+    container_name: geo-alert-redis
+    ports:
+      - "6379:6379"
+    volumes:
+      - redis_data:/data
+    healthcheck:
+      test: [ "CMD", "redis-cli", "ping" ]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+
+  app:
+    build: .
+    container_name: geo-alert-core
+    depends_on:
+      postgres:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+    environment:
+      SERVER_PORT: 8080
+      POSTGRES_HOST: postgres
+      POSTGRES_PORT: 5432
+      POSTGRES_USER: postgres
+      POSTGRES_PASSWORD: postgres
+      POSTGRES_DB: geo_alerts
+      POSTGRES_SSLMODE: disable
+      REDIS_HOST: redis
+      REDIS_PORT: 6379
+      REDIS_PASSWORD: ""
+      REDIS_DB: 0
+      API_KEY: ${API_KEY:-your-secret-api-key-change-me}
+      WEBHOOK_URL: ${WEBHOOK_URL:-http://localhost:9090/webhook}
+      WEBHOOK_RETRY_ATTEMPTS: 3
+      WEBHOOK_RETRY_DELAY_SECONDS: 5
+      STATS_TIME_WINDOW_MINUTES: 60
+    ports:
+      - "8080:8080"
+    volumes:
+      - ./migrations:/root/migrations
+  # HTTP заглушка для тестирования вебхуков (опционально)
+  # Для тестирования рекомендуется использовать ngrok
+  # webhook-stub:
+  #   image: httpd:alpine
+  #   container_name: geo-alert-webhook-stub
+  #   ports:
+  #     - "9090:80"
+  #   command: ["httpd", "-D", "FOREGROUND"]
+
+volumes:
+  postgres_data:
+  redis_data:

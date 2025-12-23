@@ -32,7 +32,7 @@ type Config struct {
 
 	// webhook
 	WebhookURL           string
-	WebhookRetryAttemps  int
+	WebhookRetryAttempts int
 	WebhookRetryDelaySec time.Duration
 
 	// statistika
@@ -60,8 +60,8 @@ func Load() (*Config, error) {
 		APIKey: getEnv("API_KEY", ""),
 
 		WebhookURL:           getEnv("WEBHOOK_URL", "http://localhost:9090/webhook"),
-		WebhookRetryAttemps:  getEnvAsInt("WEBHOOK_RETRY_ATTEMPS", 3),
-		WebhookRetryDelaySec: getEnvAsDuration("WEBHOOK_RETRY_DELAY_SEC", 5*time.Second),
+		WebhookRetryAttempts: getEnvAsInt("WEBHOOK_RETRY_ATTEMPTS", 3),
+		WebhookRetryDelaySec: time.Duration(getEnvAsInt("WEBHOOK_RETRY_DELAY_SECONDS", 5)) * time.Second,
 
 		StatsTimeWindowMinutes: getEnvAsInt("STATS_TIME_WINDOW_MINUTES", 60),
 	}
@@ -107,7 +107,7 @@ func (c *Config) GetPostgresDSN() string {
 	)
 }
 
-// vozvrashyaem podkluchenie k redis
-func (c *Config) GetRedisOptions() *redis.Options {
+// vozvrashyaem adres redis
+func (c *Config) GetRedisAddr() string {
 	return fmt.Sprintf("%s:%s", c.RedisHost, c.RedisPort)
 }

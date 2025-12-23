@@ -1,4 +1,3 @@
-// internal/service/incident_service.go
 package service
 
 import (
@@ -10,24 +9,26 @@ import (
 	"github.com/google/uuid"
 )
 
-// business logic for incidents
 type IncidentService struct {
-	repo repository.IncidentRepository
+	repo            repository.IncidentRepository
+	locationService *LocationService // Для инвалидации кэша
 }
 
 func NewIncidentService(repo repository.IncidentRepository) *IncidentService {
 	return &IncidentService{repo: repo}
 }
 
+func (s *IncidentService) SetLocationService(locationService *LocationService) {
+	s.locationService = locationService
+}
+
 func (s *IncidentService) CreateIncident(ctx context.Context, req *domain.CreateIncidentRequest) (*domain.Incident, error) {
-	// validation of coordinates
 	if err := s.validateCoordinates(req.Latitude, req.Longitude); err != nil {
 		return nil, err
 	}
 
-	// validation of radius
 	if req.Radius <= 0 {
-		return nil, fmt.Errorf("radius must be positive")
+		return nil, domain.ErrInvalidRadius
 	}
 
 	incident := &domain.Incident{
@@ -43,21 +44,28 @@ func (s *IncidentService) CreateIncident(ctx context.Context, req *domain.Create
 		return nil, fmt.Errorf("failed to create incident: %w", err)
 	}
 
+	// Инвалидируем кэш активных инцидентов
+	if s.locationService != nil {
+		_ = s.locationService.InvalidateCache(ctx)
+	}
+
 	return incident, nil
 }
 
-// get incident by id
 func (s *IncidentService) GetIncident(ctx context.Context, id uuid.UUID) (*domain.Incident, error) {
-	return s.repo.GetByID(ctx, id)
+	incident, err := s.repo.GetByID(ctx, id)
+	if err != nil {
+		return nil, err
+	}
+	return incident, nil
 }
 
-// get all incidents with pagination
 func (s *IncidentService) GetAllIncidents(ctx context.Context, page, pageSize int) ([]*domain.Incident, error) {
 	if page < 1 {
 		page = 1
 	}
 	if pageSize < 1 || pageSize > 100 {
-		pageSize = 20 // дефолтное значение
+		pageSize = 20
 	}
 
 	offset := (page - 1) * pageSize
@@ -70,7 +78,6 @@ func (s *IncidentService) UpdateIncident(ctx context.Context, id uuid.UUID, req 
 		return nil, err
 	}
 
-	// update only passed fields
 	if req.Title != nil {
 		incident.Title = *req.Title
 	}
@@ -85,7 +92,7 @@ func (s *IncidentService) UpdateIncident(ctx context.Context, id uuid.UUID, req 
 	}
 	if req.Radius != nil {
 		if *req.Radius <= 0 {
-			return nil, fmt.Errorf("radius must be positive")
+			return nil, domain.ErrInvalidRadius
 		}
 		incident.Radius = *req.Radius
 	}
@@ -93,7 +100,6 @@ func (s *IncidentService) UpdateIncident(ctx context.Context, id uuid.UUID, req 
 		incident.IsActive = *req.IsActive
 	}
 
-	// validation of coordinates if they changed
 	if req.Latitude != nil || req.Longitude != nil {
 		if err := s.validateCoordinates(incident.Latitude, incident.Longitude); err != nil {
 			return nil, err
@@ -104,20 +110,33 @@ func (s *IncidentService) UpdateIncident(ctx context.Context, id uuid.UUID, req 
 		return nil, fmt.Errorf("failed to update incident: %w", err)
 	}
 
+	// Инвалидируем кэш активных инцидентов
+	if s.locationService != nil {
+		_ = s.locationService.InvalidateCache(ctx)
+	}
+
 	return incident, nil
 }
 
 func (s *IncidentService) DeleteIncident(ctx context.Context, id uuid.UUID) error {
-	return s.repo.Delete(ctx, id)
+	if err := s.repo.Delete(ctx, id); err != nil {
+		return err
+	}
+
+	// Инвалидируем кэш активных инцидентов
+	if s.locationService != nil {
+		_ = s.locationService.InvalidateCache(ctx)
+	}
+
+	return nil
 }
 
-// proverka validnosti koordinat
 func (s *IncidentService) validateCoordinates(lat, lon float64) error {
 	if lat < -90 || lat > 90 {
-		return fmt.Errorf("latitude must be between -90 and 90")
+		return fmt.Errorf("%w: latitude must be between -90 and 90", domain.ErrInvalidCoordinates)
 	}
 	if lon < -180 || lon > 180 {
-		return fmt.Errorf("longitude must be between -180 and 180")
+		return fmt.Errorf("%w: longitude must be between -180 and 180", domain.ErrInvalidCoordinates)
 	}
 	return nil
 }

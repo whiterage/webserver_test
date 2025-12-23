@@ -32,11 +32,10 @@ func NewLocationService(
 		checkRepo:     checkRepo,
 		redisClient:   redisClient,
 		webhookSender: webhookSender,
-		cacheTTL:      5 * time.Minute, // Cache active incidents for 5 minutes
+		cacheTTL:      5 * time.Minute,
 	}
 }
 
-// proverka koordinat i vozvrat blizhayshix incidetov
 func (s *LocationService) CheckLocation(ctx context.Context, req *domain.LocationCheckRequest) (*domain.LocationCheckResponse, error) {
 	if req.Latitude < -90 || req.Latitude > 90 {
 		return nil, fmt.Errorf("invalid latitude")
@@ -45,19 +44,13 @@ func (s *LocationService) CheckLocation(ctx context.Context, req *domain.Locatio
 		return nil, fmt.Errorf("invalid longitude")
 	}
 
-	// get active incidents (with cache)
-	incidents, err := s.getActiveIncidentsCached(ctx)
-	if err != nil {
-		return nil, fmt.Errorf("failed to get incidents: %w", err)
-	}
-
-	// find nearby incidents
+	// Находим ближайшие инциденты напрямую
 	nearbyIncidents, err := s.incidentRepo.FindNearbyIncidents(ctx, req.Latitude, req.Longitude)
 	if err != nil {
 		return nil, fmt.Errorf("failed to find nearby incidents: %w", err)
 	}
 
-	// save check to db
+	// Сохраняем проверку в БД
 	check := &domain.LocationCheck{
 		UserID:    req.UserID,
 		Latitude:  req.Latitude,
@@ -68,7 +61,7 @@ func (s *LocationService) CheckLocation(ctx context.Context, req *domain.Locatio
 		return nil, fmt.Errorf("failed to save location check: %w", err)
 	}
 
-	// link check to found incidents
+	// Связываем проверку с найденными инцидентами
 	if len(nearbyIncidents) > 0 {
 		incidentIDs := make([]uuid.UUID, len(nearbyIncidents))
 		for i, inc := range nearbyIncidents {
@@ -80,6 +73,7 @@ func (s *LocationService) CheckLocation(ctx context.Context, req *domain.Locatio
 		}
 	}
 
+	// Асинхронно отправляем вебхук (если есть инциденты)
 	if len(nearbyIncidents) > 0 {
 		go s.sendWebhookAsync(check, nearbyIncidents)
 	}
@@ -90,8 +84,13 @@ func (s *LocationService) CheckLocation(ctx context.Context, req *domain.Locatio
 	}, nil
 }
 
-// polychenie aktivnyh incidetov s keshirovaniem v Redis
+// получает активные инциденты с кэшированием в Redis
 func (s *LocationService) getActiveIncidentsCached(ctx context.Context) ([]*domain.Incident, error) {
+	// Если Redis не настроен, загружаем напрямую из БД
+	if s.redisClient == nil {
+		return s.incidentRepo.GetActiveIncidents(ctx)
+	}
+
 	cacheKey := "active_incidents"
 
 	cached, err := s.redisClient.Get(ctx, cacheKey).Result()
@@ -102,27 +101,25 @@ func (s *LocationService) getActiveIncidentsCached(ctx context.Context) ([]*doma
 		}
 	}
 
-	// cache not found or error, load from db
+	// Кэш не найден или ошибка, загружаем из БД
 	incidents, err := s.incidentRepo.GetActiveIncidents(ctx)
 	if err != nil {
 		return nil, err
 	}
 
-	// save to cache
+	// Сохраняем в кэш (игнорируем ошибки кэширования)
 	jsonData, err := json.Marshal(incidents)
-	if err == nil {
-		s.redisClient.Set(ctx, cacheKey, jsonData, s.cacheTTL)
+	if err == nil && s.redisClient != nil {
+		_ = s.redisClient.Set(ctx, cacheKey, jsonData, s.cacheTTL)
 	}
 
 	return incidents, nil
 }
 
-// asynch otpravlyaem webhook
 func (s *LocationService) sendWebhookAsync(check *domain.LocationCheck, incidents []*domain.Incident) {
 	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
 	defer cancel()
 
-	// convert incidents to webhook
 	incidentInfos := make([]webhook.IncidentInfo, len(incidents))
 	for i, inc := range incidents {
 		incidentInfos[i] = webhook.IncidentInfo{
@@ -156,7 +153,9 @@ func (s *LocationService) convertToDomainIncidents(incidents []*domain.Incident)
 	return result
 }
 
-// called when creating/updating/deleting incident
 func (s *LocationService) InvalidateCache(ctx context.Context) error {
+	if s.redisClient == nil {
+		return nil
+	}
 	return s.redisClient.Del(ctx, "active_incidents").Err()
 }

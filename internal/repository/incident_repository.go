@@ -10,37 +10,22 @@ import (
 	"github.com/google/uuid"
 )
 
-// interface dlya raboty s incidetami
+// IncidentRepository интерфейс для работы с инцидентами
 type IncidentRepository interface {
 	Create(ctx context.Context, incident *domain.Incident) error
-
-	// get by id
 	GetByID(ctx context.Context, id uuid.UUID) (*domain.Incident, error)
-
-	// get all
-	GetAll(ctx context.Context) ([]*domain.Incident, error)
-
-	// only active
+	GetAll(ctx context.Context, limit, offset int) ([]*domain.Incident, error)
 	GetActiveIncidents(ctx context.Context) ([]*domain.Incident, error)
-
-	// update
-	Update(ctx context.Context, incident *domain.Incident) error
-
-	// delete
+	Update(ctx context.Context, id uuid.UUID, incident *domain.Incident) error
 	Delete(ctx context.Context, id uuid.UUID) error
-
-	// find locations
-	FindNearbyIncidents(ctx context.Context, latitude, longitude float64, radius float64) ([]*domain.Incident, error)
-
-	// statistics
-	GetStats(ctx context.Context, zoneID uuid.UUID) (*domain.IncidentStats, error)
+	FindNearbyIncidents(ctx context.Context, latitude, longitude float64) ([]*domain.Incident, error)
+	GetStats(ctx context.Context, minutes int) ([]*domain.IncidentStats, error)
 }
 
 type postgresIncidentRepository struct {
 	db *sql.DB
 }
 
-// new realization of incedent repository
 func NewPostgresIncidentRepository(db *sql.DB) IncidentRepository {
 	return &postgresIncidentRepository{db: db}
 }
@@ -96,7 +81,7 @@ func (r *postgresIncidentRepository) GetByID(ctx context.Context, id uuid.UUID) 
 	)
 
 	if err == sql.ErrNoRows {
-		return nil, fmt.Errorf("incident not found")
+		return nil, fmt.Errorf("%w", domain.ErrIncidentNotFound)
 	}
 	if err != nil {
 		return nil, fmt.Errorf("failed to get incident: %w", err)
@@ -209,14 +194,13 @@ func (r *postgresIncidentRepository) Update(ctx context.Context, id uuid.UUID, i
 	}
 
 	if rowsAffected == 0 {
-		return fmt.Errorf("incident not found")
+		return fmt.Errorf("%w", domain.ErrIncidentNotFound)
 	}
 
 	return nil
 }
 
 func (r *postgresIncidentRepository) Delete(ctx context.Context, id uuid.UUID) error {
-	// Soft delete
 	query := `UPDATE incidents SET is_active = false, updated_at = $1 WHERE id = $2`
 
 	result, err := r.db.ExecContext(ctx, query, time.Now(), id)
@@ -230,7 +214,7 @@ func (r *postgresIncidentRepository) Delete(ctx context.Context, id uuid.UUID) e
 	}
 
 	if rowsAffected == 0 {
-		return fmt.Errorf("incident not found")
+		return fmt.Errorf("%w", domain.ErrIncidentNotFound)
 	}
 
 	return nil
@@ -277,6 +261,7 @@ func (r *postgresIncidentRepository) FindNearbyIncidents(ctx context.Context, la
 	return incidents, nil
 }
 
+// Используем параметризованный запрос вместо fmt.Sprintf (защита от SQL injection)
 func (r *postgresIncidentRepository) GetStats(ctx context.Context, minutes int) ([]*domain.IncidentStats, error) {
 	query := `
 		SELECT 
@@ -285,13 +270,13 @@ func (r *postgresIncidentRepository) GetStats(ctx context.Context, minutes int) 
 		FROM incidents i
 		LEFT JOIN location_check_incidents lci ON i.id = lci.incident_id
 		LEFT JOIN location_checks lc ON lci.location_check_id = lc.id
-			AND lc.checked_at >= NOW() - INTERVAL '%d minutes'
+			AND lc.checked_at >= NOW() - INTERVAL '1 minute' * $1
 		WHERE i.is_active = true
 		GROUP BY i.id
 		ORDER BY user_count DESC
 	`
 
-	rows, err := r.db.QueryContext(ctx, fmt.Sprintf(query, minutes))
+	rows, err := r.db.QueryContext(ctx, query, minutes)
 	if err != nil {
 		return nil, fmt.Errorf("failed to get stats: %w", err)
 	}

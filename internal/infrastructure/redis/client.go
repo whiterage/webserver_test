@@ -27,8 +27,9 @@ func NewClient(addr, password string, db int) (*Client, error) {
 }
 
 func (c *Client) GetClient() *redis.Client {
-	return c.rdb
+	return c.client
 }
+
 func (c *Client) Close() error {
-	return c.rdb.Close()
+	return c.client.Close()
 }
